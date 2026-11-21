@@ -1,16 +1,57 @@
 # comment-translator
 
-Emacs 插件：写代码时，自动把注释里的中文翻译成英文。
-支持所有编程语言，只翻译注释，绝不碰代码和字符串。
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Emacs](https://img.shields.io/badge/Emacs-27.1%2B-purple.svg)]()
+[![Tests](https://img.shields.io/badge/tests-26%20passing-brightgreen.svg)]()
+
+An Emacs package that automatically translates Chinese comments in your
+code into English — while you write them.
+
+Works with **every programming language Emacs supports**. Only comments
+are touched: code and string literals are never modified.
 
 ```
-// 你好，世界！           ───▶   // Hello World!
-int x = 1; /* 初始值 */         int x = 1; /* initial value */
+Before                              After
+--------------------------------    ----------------------------------
+// 你好，世界！                      // Hello World!
+int x = 1; /* 初始值 */             int x = 1; /* initial value */
+/*
+ * 这是一个多行注释。
+ * 第二行：计算总和。
+ */                                 /*
+                                     * This is a multi-line comment.
+                                     * Line 2: Calculate the sum.
+                                     */
 ```
 
-## 安装（use-package / GitHub）
+## Features
 
-需要 Emacs ≥ 29.1（内置 package-vc）：
+- **All languages** — comments are located with each major mode's own
+  syntax table, so C/C++/Java/JS/Python/Go/Rust/Shell/Lisp/HTML… all work
+  with no language-specific parser. Strings are never translated.
+- **Manual & automatic** — translate the comment at point, a region, or
+  the whole buffer; or let it happen automatically when you finish typing
+  a comment, while Emacs is idle, and before saving.
+- **10 translation backends** — 2 free services (Google Translate,
+  MyMemory) and 8 LLM providers: DeepSeek, ChatGPT, Qwen, Kimi, Doubao,
+  Xiaomi MiMo, Gemini, and Claude.
+- **Zero-friction setup** — works out of the box on the free backend;
+  an interactive `M-x comment-translator-setup` wizard; API keys read
+  from standard environment variables; `auto` mode picks the first
+  provider with a key.
+- **Token-conscious** — comments are batched into single LLM requests,
+  results are cached persistently, prompts are minimal, and output
+  length is capped per request.
+- **Layout-preserving** — comment markers, indentation, ` * ` decorations,
+  inline comments and multi-line blocks are rebuilt losslessly.
+- **Extras** — glossary for consistent terminology, bilingual mode
+  (keep the Chinese original), reverse translation (English → Chinese),
+  per-project disable, undo within the session.
+
+## Installation
+
+The package is not on MELPA yet; install from GitHub with `use-package`
+and `package-vc` (built into Emacs ≥ 29.1):
 
 ```elisp
 (use-package comment-translator
@@ -19,7 +60,7 @@ int x = 1; /* 初始值 */         int x = 1; /* initial value */
   :hook (prog-mode . comment-translator-auto-mode))
 ```
 
-或手动 clone：
+Or clone it manually:
 
 ```sh
 git clone https://github.com/liuldao/comment-translator ~/.emacs.d/lisp/comment-translator
@@ -30,97 +71,148 @@ git clone https://github.com/liuldao/comment-translator ~/.emacs.d/lisp/comment-
 (require 'comment-translator)
 ```
 
-## 配置（一分钟）
+## Quick start
 
-**零配置**：默认用免费 Google Translate，装完即用。
+**Zero configuration** — the default backend is the free Google
+Translate endpoint, so the plugin works immediately after loading.
 
-**想用 LLM（译文质量更好）**，任选一种方式：
+**Prefer an LLM?** Pick one of three ways:
 
-1. **向导**：`M-x comment-translator-setup` —— 选提供商 → 粘贴 API key → 自动写入配置。
-2. **环境变量**（推荐）：在 `~/.zshrc` 里 `export DEEPSEEK_API_KEY=sk-...`，
-   Emacs 里只写一行：
+1. Run `M-x comment-translator-setup`: choose a provider, paste the API
+   key, and it is saved to your init file.
+2. Use a standard environment variable (see the table below) and one
+   line of Elisp:
+
    ```elisp
    (setq comment-translator-backend 'deepseek)
    ```
-   也可以填 `'auto`，自动用第一家配好 key 的提供商。
-3. **直接写配置**：
+
+   Use `'auto` to pick the first provider whose key is configured.
+3. Set it explicitly:
+
    ```elisp
    (setq comment-translator-backend 'kimi
          comment-translator-kimi-api-key "sk-...")
    ```
 
-## 提供商
-
-| backend | API key 环境变量 | 默认模型 |
-| --- | --- | --- |
-| `deepseek` | `DEEPSEEK_API_KEY` | `deepseek-chat` |
-| `openai`（ChatGPT） | `OPENAI_API_KEY` | `gpt-4o-mini` |
-| `qwen`（通义千问） | `DASHSCOPE_API_KEY` | `qwen-plus` |
-| `kimi`（Moonshot） | `MOONSHOT_API_KEY` | `moonshot-v1-8k` |
-| `doubao`（豆包/方舟） | `ARK_API_KEY` | `doubao-1-5-pro-32k-250115` |
-| `mimo`（小米） | `MIMO_API_KEY` | `mimo-v2.6-pro` |
-| `gemini` | `GEMINI_API_KEY` | `gemini-2.5-flash` |
-| `claude` | `ANTHROPIC_API_KEY` | `claude-3-5-haiku-latest` |
-| `google` / `mymemory` | 免费，无需 key | — |
-
-换模型/网关：`(setq comment-translator-<名字>-model "...")`、
-`(setq comment-translator-<名字>-base-url "...")`。
-豆包在方舟控制台建了推理接入点的话，模型填 endpoint id（`ep-...`）。
-
-## 使用
-
-**手动**：
-
-| 命令 | 作用 |
-| --- | --- |
-| `C-c C-t`（`comment-translator-translate-comment`） | 翻译光标所在的注释 |
-| `comment-translator-translate-buffer` | 翻译整个缓冲区 |
-| `C-u` + 上面任意命令 | 反向：英文 → 中文 |
-| `comment-translator-revert-comment` | 撤销本次会话内的翻译 |
-
-**自动**（写完就译、空闲时译、保存前译，默认全开）：
+Then bind the manual command and enable automatic translation:
 
 ```elisp
+(global-set-key (kbd "C-c C-t") #'comment-translator-translate-comment)
 (add-hook 'prog-mode-hook #'comment-translator-auto-mode)
 ```
 
-想只保留某一种触发：`(setq comment-translator-auto-on-idle nil)` 等，
-见 `comment-translator-auto-on-write/on-idle/on-save`。
+## Translation backends
 
-## 常用自定义
+| Backend | Protocol | API key env var | Default model |
+| --- | --- | --- | --- |
+| `google` | free, no key | — | — |
+| `mymemory` | free, no key | — | — |
+| `deepseek` | OpenAI-compatible | `DEEPSEEK_API_KEY` | `deepseek-chat` |
+| `openai` (ChatGPT) | OpenAI-compatible | `OPENAI_API_KEY` | `gpt-4o-mini` |
+| `qwen` | OpenAI-compatible | `DASHSCOPE_API_KEY` | `qwen-plus` |
+| `kimi` (Moonshot) | OpenAI-compatible | `MOONSHOT_API_KEY` | `moonshot-v1-8k` |
+| `doubao` (Volcengine Ark) | OpenAI-compatible | `ARK_API_KEY` | `doubao-1-5-pro-32k-250115` |
+| `mimo` (Xiaomi) | OpenAI-compatible | `MIMO_API_KEY` | `mimo-v2.6-pro` |
+| `gemini` | native generateContent | `GEMINI_API_KEY` | `gemini-2.5-flash` |
+| `claude` | native Messages API | `ANTHROPIC_API_KEY` | `claude-3-5-haiku-latest` |
+
+Every provider has `comment-translator-<name>-api-key`, `-base-url` and
+`-model` options.  For Doubao, use your Ark endpoint id (`ep-…`) as the
+model if you created an inference endpoint.  A custom function of one
+string argument is also accepted as a backend.
+
+## Usage
+
+### Manual
+
+| Command | Action |
+| --- | --- |
+| `comment-translator-translate-comment` | translate the comment at point |
+| `comment-translator-translate-region` | translate comments in the region |
+| `comment-translator-translate-buffer` | translate the whole buffer |
+| `C-u` + any of the above | reverse direction: English → Chinese |
+| `comment-translator-revert-comment` | restore the original comment (this session) |
+| `comment-translator-clear-cache` | clear the translation cache |
+| `comment-translator-setup` | interactive provider/key configuration |
+
+### Automatic mode
+
+`M-x comment-translator-auto-mode` (or the `prog-mode` hook above)
+enables three triggers, each independently switchable:
+
+- `comment-translator-auto-on-write` (t) — translate a comment as soon
+  as you finish typing it and move point out;
+- `comment-translator-auto-on-idle` (t) — translate while Emacs is idle
+  (`comment-translator-auto-idle-delay` seconds, modified buffers only);
+- `comment-translator-auto-on-save` (t) — translate right before saving.
+
+`comment-translator-global-auto-mode` turns it on in every `prog-mode`
+buffer; `comment-translator-auto-confirm` asks before applying
+automatic changes.
+
+## Customization
+
+| Option | Default | Purpose |
+| --- | --- | --- |
+| `comment-translator-backend` | `google` | `auto` / a provider / a function |
+| `comment-translator-source-language` | `"zh-CN"` | source language code |
+| `comment-translator-target-language` | `"en"` | target language code |
+| `comment-translator-glossary` | nil | `(("服务器" . "server") …)` — locked terms |
+| `comment-translator-bilingual` | nil | keep the Chinese original as an extra line |
+| `comment-translator-llm-batching` | t | batch several comments per LLM request |
+| `comment-translator-llm-batch-limit` | 1200 | max chars per batch |
+| `comment-translator-llm-extra-args` | nil | extra JSON fields for OpenAI-compatible requests |
+| `comment-translator-cache-enabled` / `-file` | t | persistent translation cache |
+| `comment-translator-excluded-modes` / `-enabled-modes` | nil | mode filter |
+| `comment-translator-skip-regexp` | nil | skip comments matching this regexp |
+
+Disable a whole project with `.dir-locals.el`:
 
 ```elisp
-;; 术语表：锁定专业词汇的译法
-(setq comment-translator-glossary '(("服务器" . "server")))
-
-;; 双语模式：保留中文原文，译文另起一行
-(setq comment-translator-bilingual t)
-
-;; 不翻译某些模式 / 跳过匹配的注释
-(setq comment-translator-excluded-modes '(org-mode))
-(setq comment-translator-skip-regexp "TODO")
+((prog-mode . ((comment-translator-disabled . t))))
 ```
 
-按项目禁用：项目根目录 `.dir-locals.el` 里写
-`((prog-mode . ((comment-translator-disabled . t))))`。
+## Token usage
 
-## 省 token 设计
+Translation cost is kept low by design:
 
-- **批量请求**：多条注释合并为一次 LLM 调用（`comment-translator-llm-batching`，
-  默认开；`comment-translator-llm-batch-limit` 控制单批大小，格式解析失败自动
-  退回逐条请求）；
-- **持久缓存**：相同注释只翻译一次，重启 Emacs 不重复计费；
-- **精简提示词** + 输出长度按需封顶（`max_tokens`）；
-- 只处理含中文的注释，其余全部跳过。
+- **Batching** — several comments share one request (the system prompt
+  is sent once); if the model does not follow the marker format, the
+  plugin falls back to one request per comment.
+- **Persistent cache** — identical comments are translated once, ever.
+- **Minimal prompts** and a per-request `max_tokens` cap.
+- Non-Chinese comments are skipped before any network call.
 
-## 测试
+## How it works
+
+Comments are found with an incremental `parse-partial-sexp` scan of the
+buffer's syntax table, so detection matches the language exactly and
+strings are excluded.  Each comment is split into prefix / decoration /
+content / suffix, the content is translated, and the comment is rebuilt
+losslessly.
+
+## Development
 
 ```sh
+# Offline unit tests (26 tests: scanning, analysis, rendering, protocols,
+# batching, cache, fallback paths)
 emacs -Q --batch -L . -L test -l test/comment-translator-test.el \
       -f ert-run-tests-batch-and-exit
+
+# Live end-to-end test against a real backend
+emacs -Q --batch -L . -l test/e2e-live.el                 # google (free)
+CT_E2E_BACKEND=kimi CT_E2E_API_KEY=sk-... \
+  emacs -Q --batch -L . -l test/e2e-live.el               # any LLM provider
 ```
 
-## 已知限制
+## Roadmap
 
-- 请求是同步的（有缓存兜底）；Google 端点是民间接口，失效时换一家提供商即可。
-- 路线图：异步队列、翻译前 diff 预览、git diff 增量翻译、全项目批量、本地离线模型。
+Async translation queue, diff preview before applying, whole-project
+batch translation, translating only `git diff`-changed comments,
+persistent undo history, local/offline translation engines, and
+tree-sitter as an alternative comment locator.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
