@@ -1,12 +1,12 @@
 ;;; comment-translator.el --- Translate Chinese comments to English -*- lexical-binding: t; coding: utf-8; -*-
 
-;; Copyright (C) 2026  liuldao
+;; Copyright (C) 2026  c0ptr
 
-;; Author: liuldao
+;; Author: c0ptr
 ;; Version: 0.1.0
 ;; Package-Requires: ((emacs "27.1"))
 ;; Keywords: convenience, languages, tools
-;; URL: https://github.com/liuldao/comment-translator
+;; URL: https://github.com/c0ptr/comment-translator
 
 ;;; Commentary:
 
