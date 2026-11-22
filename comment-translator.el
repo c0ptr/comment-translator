@@ -1024,6 +1024,81 @@ Works for comments translated in this Emacs session."
     (delete-file comment-translator-cache-file))
   (message "comment-translator: cache cleared"))
 
+(defun ct--key-source (provider)
+  "Describe where the API key of PROVIDER comes from."
+  (let* ((var (intern (format "comment-translator-%s-api-key" provider)))
+         (env (cdr (assq provider ct--env-key-alist))))
+    (cond
+     ((symbol-value var) (format "option `%s'" var))
+     ((and env (getenv env)) (format "env %s" env))
+     (t "MISSING"))))
+
+(defun ct--doctor-live-test (backend)
+  "Try one real translation with BACKEND and describe the outcome."
+  (cond
+   ((null backend) "SKIPPED (no API key configured)")
+   ((ct--llm-backend-p backend)
+    (condition-case err
+        (format "OK: %S" (ct--llm-raw-translate backend "你好，世界！"))
+      (error (format "FAILED: %s" (error-message-string err)))))
+   ((functionp backend)
+    (condition-case err
+        (format "OK: %S" (funcall backend "你好，世界！"))
+      (error (format "FAILED: %s" (error-message-string err)))))
+   (t (format "SKIPPED (unknown backend %S)" backend))))
+
+;;;###autoload
+(defun comment-translator-doctor ()
+  "Show a diagnostic report for comment-translator.
+Reports which file is loaded, the resolved backend, where the API key
+comes from, endpoint and model settings, cache state, and the result of
+one live translation request.  Useful when translation does not work."
+  (interactive)
+  (let* ((raw comment-translator-backend)
+         (backend (ct--resolve-backend))
+         (file (or (locate-library "comment-translator") "unknown")))
+    (with-current-buffer (get-buffer-create "*comment-translator doctor*")
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (insert "comment-translator doctor\n"
+                "=============================\n")
+        (insert (format "loaded file   : %s\n" file))
+        (insert (format "backend       : %S (effective: %s)\n"
+                        raw (if backend (format "%S" backend) "none")))
+        (insert (format "language      : %s -> %s\n"
+                        comment-translator-source-language
+                        comment-translator-target-language))
+        (when backend
+          (if (ct--llm-backend-p backend)
+              (insert (format "api key       : %s\n" (ct--key-source backend))
+                      (format "base url      : %s\n"
+                              (symbol-value (intern (format "comment-translator-%s-base-url"
+                                                            backend))))
+                      (format "model         : %s\n"
+                              (symbol-value (intern (format "comment-translator-%s-model"
+                                                            backend)))))
+            (insert "api key       : (custom backend function)\n")))
+        (insert (format "batching      : %s (limit %s chars)\n"
+                        (if comment-translator-llm-batching "on" "off")
+                        comment-translator-llm-batch-limit))
+        (insert (format "cache file    : %s (%s)\n"
+                        comment-translator-cache-file
+                        (if (file-exists-p comment-translator-cache-file)
+                            "exists"
+                          "missing")))
+        (insert (format "cache entries : %d\n" (hash-table-count ct--cache)))
+        (insert (format "glossary      : %d terms\n"
+                        (length comment-translator-glossary)))
+        (insert "\nlive test     : "
+                (ct--doctor-live-test backend)
+                "\n\n"
+                "If the live test fails: check the API key, the network,\n"
+                "and whether this file is the newest version of the package\n"
+                "(M-x package-vc-upgrade RET comment-translator RET).\n"))
+      (special-mode)
+      (goto-char (point-min))
+      (display-buffer (current-buffer)))))
+
 ;;;###autoload
 (defun comment-translator-setup ()
   "Interactively configure the translation provider and its API key.
