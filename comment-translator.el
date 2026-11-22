@@ -36,10 +36,7 @@
 ;;
 ;; Translation backends (`comment-translator-backend'):
 ;;
-;; 免费翻译服务（无需 API key）:
-;;     google, mymemory
-;;
-;; LLM API 提供商（各自需要 API key）:
+;; LLM API 提供商（各自需要 API key，支持环境变量）:
 ;;     deepseek -- DeepSeek
 ;;     openai   -- ChatGPT (OpenAI)
 ;;     qwen     -- 通义千问 (阿里云百炼 DashScope)
@@ -48,6 +45,7 @@
 ;;     mimo     -- 小米 MiMo
 ;;     gemini   -- Google Gemini（原生 generateContent 协议）
 ;;     claude   -- Claude (Anthropic，原生 Messages 协议)
+;;     auto     -- 自动选用第一家配好 key 的提供商（默认）
 ;;
 ;; 自定义函数
 ;;
@@ -65,14 +63,11 @@
 
 ;;; Options ----------------------------------------------------------------
 
-(defcustom comment-translator-backend 'google
+(defcustom comment-translator-backend 'auto
   "Translation backend to use.
 `auto'       -- pick the first LLM provider that has an API key
-                configured (option or environment variable); if none
-                has one, fall back to the free Google endpoint.
-Free translation services (no API key needed):
-  `google'    -- free endpoint of Google Translate.
-  `mymemory'  -- free MyMemory API (api.mymemory.translated.net).
+                configured (option or environment variable); when none
+                has one, commands explain how to configure a key.
 LLM providers (each needs its own `comment-translator-<name>-api-key'
 option or the conventional environment variable):
   `deepseek'  -- DeepSeek (OpenAI-compatible).
@@ -85,8 +80,6 @@ option or the conventional environment variable):
   `claude'    -- Claude / Anthropic (native Messages API).
 A function  -- called with one string argument; must return the translation."
   :type '(choice (const :tag "Auto (first provider with a key)" auto)
-                 (const :tag "Google Translate (free)" google)
-                 (const :tag "MyMemory (free)" mymemory)
                  (const :tag "DeepSeek" deepseek)
                  (const :tag "ChatGPT (OpenAI)" openai)
                  (const :tag "通义千问 (Qwen)" qwen)
@@ -99,7 +92,7 @@ A function  -- called with one string argument; must return the translation."
 
 (defcustom comment-translator-source-language "zh-CN"
   "Source language, as expected by the active backend.
-For the google and mymemory backends use codes such as \"zh-CN\", \"en\"."
+Use codes such as \"zh-CN\", \"en\"."
   :type 'string)
 
 (defcustom comment-translator-target-language "en"
@@ -249,10 +242,6 @@ Larger batches mean fewer requests; smaller ones are more reliable."
 (defconst ct--batch-marker "<<<CT-END>>>"
   "Delimiter separating comments inside a batched LLM request.")
 
-(defcustom comment-translator-mymemory-email nil
-  "Optional MyMemory account email; raises the free quota to 50k chars/day."
-  :type '(choice (const :tag "None" nil) string))
-
 (defvar-local comment-translator-disabled nil
   "Non-nil disables translation in this buffer.
 Set it per-project with a .dir-locals.el entry:
@@ -311,15 +300,6 @@ In reverse mode the glossary pairs are swapped."
     (dolist (pair pairs text)
       (setq text (replace-regexp-in-string
                   (regexp-quote (car pair)) (cdr pair) text t t)))))
-
-(defun ct--unescape-entities (text)
-  "Decode the few HTML entities the MyMemory backend returns."
-  (let ((entities '(("&amp;" . "&") ("&lt;" . "<") ("&gt;" . ">")
-                    ("&quot;" . "\"") ("&apos;" . "'") ("&#39;" . "'")
-                    ("&#039;" . "'") ("&nbsp;" . " "))))
-    (dolist (entity entities text)
-      (setq text (replace-regexp-in-string
-                  (regexp-quote (car entity)) (cdr entity) text t t)))))
 
 ;;; Cache -------------------------------------------------------------------
 
@@ -422,42 +402,6 @@ body, or signal an error."
             (error "comment-translator: HTTP failure for %s: %s"
                    url (string-trim (truncate-string-to-width body 200)))))))))
 
-(defun ct--google-translate (text)
-  "Translate TEXT with the free Google Translate endpoint."
-  (let* ((url (concat "https://translate.googleapis.com/translate_a/single"
-                      "?client=gtx"
-                      "&sl=" (url-hexify-string comment-translator-source-language)
-                      "&tl=" (url-hexify-string comment-translator-target-language)
-                      "&dt=t&q=" (url-hexify-string text)))
-         (json (ct--request-json url "GET"
-                                 '(("Accept-Encoding" . "identity")
-                                   ("Accept" . "application/json"))
-                                 nil)))
-    (unless (listp json)
-      (error "comment-translator: unexpected Google response %S" json))
-    (mapconcat (lambda (seg) (if (listp seg) (or (car seg) "") ""))
-               (car json) "")))
-
-(defun ct--mymemory-translate (text)
-  "Translate TEXT with the free MyMemory API."
-  (let* ((pair (concat comment-translator-source-language "|"
-                       comment-translator-target-language))
-         (url (concat "https://api.mymemory.translated.net/get"
-                      "?q=" (url-hexify-string text)
-                      "&langpair=" (url-hexify-string pair)
-                      (when comment-translator-mymemory-email
-                        (concat "&de="
-                                (url-hexify-string comment-translator-mymemory-email)))))
-         (json (ct--request-json url "GET"
-                                 '(("Accept-Encoding" . "identity"))
-                                 nil))
-         (data (cdr (assoc 'responseData json)))
-         (result (cdr (assoc 'translatedText data))))
-    (unless (and result (not (string-empty-p result)))
-      (error "comment-translator: MyMemory error: %S"
-             (or (cdr (assoc 'responseDetails json)) json)))
-    (ct--unescape-entities result)))
-
 (defun ct--merge-alists (base extra)
   "Merge alists BASE and EXTRA; entries of EXTRA win on duplicate keys."
   (let ((result (copy-sequence base)))
@@ -492,11 +436,16 @@ the conventional environment variable."
 (defun ct--resolve-backend ()
   "Return the effective backend, resolving the symbol `auto'.
 With `auto', use the first LLM provider that has an API key configured
-(option or environment variable); fall back to the free Google endpoint."
+(option or environment variable); return nil when none has one."
   (if (eq comment-translator-backend 'auto)
-      (or (cl-find-if #'ct--provider-key ct--auto-provider-order)
-          'google)
+      (cl-find-if #'ct--provider-key ct--auto-provider-order)
     comment-translator-backend))
+
+(defun ct--no-key-message ()
+  "Return the message shown when no provider has an API key."
+  (concat "comment-translator: no API key configured. "
+          "Run `M-x comment-translator-setup', or set an environment "
+          "variable such as DEEPSEEK_API_KEY or OPENAI_API_KEY."))
 
 (defun ct--llm-system-prompt (&optional extra)
   "Return the compact system prompt shared by every LLM backend.
@@ -648,15 +597,16 @@ Return nil when the backend produced nothing useful."
          (key (ct--cache-key glossed))
          (cached (gethash key ct--cache))
          (translated (or cached
-                         (pcase backend
-                           ('google (ct--google-translate glossed))
-                           ('mymemory (ct--mymemory-translate glossed))
-                           ((pred ct--llm-backend-p)
-                            (ct--llm-raw-translate backend glossed))
-                           ((pred functionp)
-                            (funcall backend glossed))
-                           (_ (error "comment-translator: unknown backend: %S"
-                                     backend))))))
+                         (progn
+                           (unless backend
+                             (user-error (ct--no-key-message)))
+                           (pcase backend
+                             ((pred ct--llm-backend-p)
+                              (ct--llm-raw-translate backend glossed))
+                             ((pred functionp)
+                              (funcall backend glossed))
+                             (_ (error "comment-translator: unknown backend: %S"
+                                       backend)))))))
     (when (and (stringp translated)
                (not (string-empty-p (string-trim translated))))
       (setq translated (string-trim translated "[ \t\r]+" "[ \t\r]+"))
@@ -987,6 +937,8 @@ Return the number of translated comments."
                   (not (ct--bilingual-already-translated-p region))))
            regions))
          (count 0) (failed 0))
+    (unless backend
+      (user-error (ct--no-key-message)))
     (when (> (length candidates) 1)
       (message "comment-translator: translating %d comments..."
                (length candidates)))
@@ -1075,10 +1027,9 @@ Works for comments translated in this Emacs session."
 ;;;###autoload
 (defun comment-translator-setup ()
   "Interactively configure the translation provider and its API key.
-Asks for a provider, then (for LLM providers) for an API key -- leaving
-the key empty keeps the current option or environment variable.  Saves
-the result with `customize-save-variable' so the configuration survives
-restarts."
+Asks for a provider, then for an API key -- leaving the key empty keeps
+the current option or environment variable.  Saves the result with
+`customize-save-variable' so the configuration survives restarts."
   (interactive)
   (let* ((choices '(("DeepSeek" . deepseek)
                     ("ChatGPT (OpenAI)" . openai)
@@ -1087,33 +1038,30 @@ restarts."
                     ("豆包 (Doubao)" . doubao)
                     ("小米 MiMo" . mimo)
                     ("Gemini (Google)" . gemini)
-                    ("Claude (Anthropic)" . claude)
-                    ("Google Translate (free, no key)" . google)
-                    ("MyMemory (free, no key)" . mymemory)))
+                    ("Claude (Anthropic)" . claude)))
          (name (completing-read "Translation provider: " choices nil t))
          (provider (cdr (assoc name choices))))
-    (when (memq provider '(openai deepseek qwen kimi doubao mimo gemini claude))
-      (let* ((var (intern (format "comment-translator-%s-api-key" provider)))
-             (env (cdr (assq provider ct--env-key-alist)))
-             (env-val (and env (getenv env)))
-             (default (or (symbol-value var) env-val))
-             (prompt (if default
-                         (format "API key (empty keeps %s): "
-                                 (if (symbol-value var)
-                                     (concat (substring (symbol-value var) 0 6) "...")
-                                   (concat "env " env)))
-                       "API key (paste here): "))
-             (key (read-string prompt nil nil default)))
-        (when (and (not (string-empty-p key))
-                   (not (equal key (symbol-value var))))
-          (set var key)
-          (condition-case err
-              (customize-save-variable var key)
-            (error (message "comment-translator: saved for this session only: %S"
-                            err))))
-        (when (and env-val (not (symbol-value var)))
-          (message "comment-translator: using key from the %s environment variable"
-                   env))))
+    (let* ((var (intern (format "comment-translator-%s-api-key" provider)))
+           (env (cdr (assq provider ct--env-key-alist)))
+           (env-val (and env (getenv env)))
+           (default (or (symbol-value var) env-val))
+           (prompt (if default
+                       (format "API key (empty keeps %s): "
+                               (if (symbol-value var)
+                                   (concat (substring (symbol-value var) 0 6) "...")
+                                 (concat "env " env)))
+                     "API key (paste here): "))
+           (key (read-string prompt nil nil default)))
+      (when (and (not (string-empty-p key))
+                 (not (equal key (symbol-value var))))
+        (set var key)
+        (condition-case err
+            (customize-save-variable var key)
+          (error (message "comment-translator: saved for this session only: %S"
+                          err))))
+      (when (and env-val (not (symbol-value var)))
+        (message "comment-translator: using key from the %s environment variable"
+                 env)))
     (condition-case err
         (customize-save-variable 'comment-translator-backend provider)
       (error (setq comment-translator-backend provider)
