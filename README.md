@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Emacs](https://img.shields.io/badge/Emacs-27.1%2B-purple.svg)]()
-[![Tests](https://img.shields.io/badge/tests-26%20passing-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-30%20passing-brightgreen.svg)]()
 
 An Emacs package that automatically translates Chinese comments in your
 code into English — while you write them.
@@ -32,13 +32,12 @@ int x = 1; /* 初始值 */             int x = 1; /* initial value */
 - **Manual & automatic** — translate the comment at point, a region, or
   the whole buffer; or let it happen automatically when you finish typing
   a comment, while Emacs is idle, and before saving.
-- **10 translation backends** — 2 free services (Google Translate,
-  MyMemory) and 8 LLM providers: DeepSeek, ChatGPT, Qwen, Kimi, Doubao,
+- **8 LLM providers** — DeepSeek, ChatGPT (OpenAI), Qwen, Kimi, Doubao,
   Xiaomi MiMo, Gemini, and Claude.
-- **Zero-friction setup** — works out of the box on the free backend;
-  an interactive `M-x comment-translator-setup` wizard; API keys read
-  from standard environment variables; `auto` mode picks the first
-  provider with a key.
+- **Zero-friction setup** — an interactive `M-x comment-translator-setup`
+  wizard; API keys read from standard environment variables; the default
+  `auto` mode picks the first provider with a key and explains how to
+  configure one when none is found.
 - **Token-conscious** — comments are batched into single LLM requests,
   results are cached persistently, prompts are minimal, and output
   length is capped per request.
@@ -47,6 +46,9 @@ int x = 1; /* 初始值 */             int x = 1; /* initial value */
 - **Extras** — glossary for consistent terminology, bilingual mode
   (keep the Chinese original), reverse translation (English → Chinese),
   per-project disable, undo within the session.
+- **Self-diagnosis** — `M-x comment-translator-doctor` reports the loaded
+  file, the resolved backend, where the API key comes from, and runs one
+  live translation, so problems are one command away from an answer.
 
 ## Installation
 
@@ -55,7 +57,7 @@ and `package-vc` (built into Emacs ≥ 29.1):
 
 ```elisp
 (use-package comment-translator
-  :vc (:url "https://github.com/liuldao/comment-translator")
+  :vc (:url "https://github.com/c0ptr/comment-translator")
   :bind ("C-c C-t" . comment-translator-translate-comment)
   :hook (prog-mode . comment-translator-auto-mode))
 ```
@@ -63,7 +65,7 @@ and `package-vc` (built into Emacs ≥ 29.1):
 Or clone it manually:
 
 ```sh
-git clone https://github.com/liuldao/comment-translator ~/.emacs.d/lisp/comment-translator
+git clone https://github.com/c0ptr/comment-translator ~/.emacs.d/lisp/comment-translator
 ```
 
 ```elisp
@@ -71,24 +73,35 @@ git clone https://github.com/liuldao/comment-translator ~/.emacs.d/lisp/comment-
 (require 'comment-translator)
 ```
 
+**Upgrading.** `package-vc` installs a snapshot; it does not track upstream
+automatically.  After a new release, run:
+
+```
+M-x package-vc-upgrade RET comment-translator RET
+```
+
+(or delete `~/.emacs.d/elpa/comment-translator` and restart — the
+`use-package :vc` form reinstalls it).  `M-x comment-translator-doctor`
+shows which file is actually loaded.
+
 ## Quick start
 
-**Zero configuration** — the default backend is the free Google
-Translate endpoint, so the plugin works immediately after loading.
-
-**Prefer an LLM?** Pick one of three ways:
+All backends are LLM APIs, so configure an API key first — pick one of
+three ways:
 
 1. Run `M-x comment-translator-setup`: choose a provider, paste the API
    key, and it is saved to your init file.
-2. Use a standard environment variable (see the table below) and one
-   line of Elisp:
+2. Set a standard environment variable (see the table below), e.g. in
+   your shell profile:
 
-   ```elisp
-   (setq comment-translator-backend 'deepseek)
+   ```sh
+   export DEEPSEEK_API_KEY="sk-..."
    ```
 
-   Use `'auto` to pick the first provider whose key is configured.
-3. Set it explicitly:
+   That is enough — the default backend is `auto`, which picks the
+   first provider whose key is configured.  To pin a provider, add
+   `(setq comment-translator-backend 'deepseek)` to your init file.
+3. Set it explicitly in Elisp:
 
    ```elisp
    (setq comment-translator-backend 'kimi
@@ -106,8 +119,6 @@ Then bind the manual command and enable automatic translation:
 
 | Backend | Protocol | API key env var | Default model |
 | --- | --- | --- | --- |
-| `google` | free, no key | — | — |
-| `mymemory` | free, no key | — | — |
 | `deepseek` | OpenAI-compatible | `DEEPSEEK_API_KEY` | `deepseek-chat` |
 | `openai` (ChatGPT) | OpenAI-compatible | `OPENAI_API_KEY` | `gpt-4o-mini` |
 | `qwen` | OpenAI-compatible | `DASHSCOPE_API_KEY` | `qwen-plus` |
@@ -135,6 +146,7 @@ string argument is also accepted as a backend.
 | `comment-translator-revert-comment` | restore the original comment (this session) |
 | `comment-translator-clear-cache` | clear the translation cache |
 | `comment-translator-setup` | interactive provider/key configuration |
+| `comment-translator-doctor` | diagnostic report + one live translation |
 
 ### Automatic mode
 
@@ -155,7 +167,7 @@ automatic changes.
 
 | Option | Default | Purpose |
 | --- | --- | --- |
-| `comment-translator-backend` | `google` | `auto` / a provider / a function |
+| `comment-translator-backend` | `auto` | `auto` / a provider / a function |
 | `comment-translator-source-language` | `"zh-CN"` | source language code |
 | `comment-translator-target-language` | `"en"` | target language code |
 | `comment-translator-glossary` | nil | `(("服务器" . "server") …)` — locked terms |
@@ -192,18 +204,32 @@ strings are excluded.  Each comment is split into prefix / decoration /
 content / suffix, the content is translated, and the comment is rebuilt
 losslessly.
 
+## Troubleshooting
+
+Start with `M-x comment-translator-doctor`.  It prints the loaded file,
+the effective backend, where the API key comes from, the endpoint and
+model, cache state, and the result of one live translation request.
+
+| Symptom | Cause and fix |
+| --- | --- |
+| Nothing happens; the comment stays unchanged | An out-of-date copy is loaded.  The doctor report's `loaded file` shows which file Emacs uses — upgrade (see Installation). |
+| `Multibyte text in HTTP request` | Old version: request bodies were not ASCII-escaped.  Upgrade. |
+| `no API key configured` | Run `M-x comment-translator-setup`, or export the provider's environment variable (e.g. `DEEPSEEK_API_KEY`). |
+| Live test fails with 401/403 | The key is wrong, expired, or not enabled for the chosen model.  Check the doctor report's `api key` and `model` lines. |
+| Timeouts or connection errors | The provider may be unreachable without a proxy — configure `url-proxy-services`, or use a provider reachable from your network (DeepSeek, Qwen, Kimi, Doubao and MiMo are usually direct-accessible from mainland China). |
+| A comment was translated once and then "frozen" | It is served from the cache.  `M-x comment-translator-clear-cache` resets it. |
+
 ## Development
 
 ```sh
-# Offline unit tests (26 tests: scanning, analysis, rendering, protocols,
-# batching, cache, fallback paths)
+# Offline unit tests (30 tests: scanning, analysis, rendering, protocols,
+# batching, cache, fallback paths, doctor)
 emacs -Q --batch -L . -L test -l test/comment-translator-test.el \
       -f ert-run-tests-batch-and-exit
 
 # Live end-to-end test against a real backend
-emacs -Q --batch -L . -l test/e2e-live.el                 # google (free)
-CT_E2E_BACKEND=kimi CT_E2E_API_KEY=sk-... \
-  emacs -Q --batch -L . -l test/e2e-live.el               # any LLM provider
+CT_E2E_BACKEND=deepseek CT_E2E_API_KEY=sk-... \
+  emacs -Q --batch -L . -l test/e2e-live.el
 ```
 
 ## Roadmap
